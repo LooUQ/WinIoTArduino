@@ -6,10 +6,10 @@ LooUQ is open-source licensing it under AGPL-v3.  Enjoy, hope it helps accelerat
 
 ## What’s Here
 **WinIoTArduino** folder contains the emulations, there are 2 currently.  
-* The WinIoTArduino (.h, .cpp) contain the basics: millis(), delay(), GPIO and a mutex class to make certain I/O code areas atomic (protected from other threads).  
-* The WinIoTArduinoSPI (.h, .cpp) contain the SPI functions.  Note: this library implements the CS for SPI outside of the standard Win IoT approach, enabling use of any GPIO for SPI device CS; we do not use the CS0 and CS1 within the SPI controller.
-* Future: WinIoTArduinoI2c 
-* Each development board will have a HW_* header file to create enums specific to the capabilities of the board.  Raspberry PI is there now for PI2 and PI3.  Win IoT supports Dragon, MinnowMax, hopefully more soon.
+* The WinIoTArduino (.h, .cpp) contain the basics: millis(), delay(), GPIO and signaling classes (a mutex class and a semaphore class to make certain I/O code areas atomic (protected from other threads)).  
+* The WinIoTArduinoSPI (.h, .cpp) contain the SPI functions.  Note: this library implements the CS for SPI outside of the standard Win IoT approach, enabling use of any GPIO for SPI device CS; we can optionally use the CS0 and CS1 within the SPI controller.  We don't for our latest project because of stability on the SPI bus (the SPI intrinsict CS was not low long enough for the device we were controlling).
+* Future: WinIoTArduinoI2C, WinIoTArduinoPWM
+* Each development board will have a HW_* header file to create enums specific to the capabilities of the board.  Raspberry PI3 is there now for PI3 (supports PI3 as well).  Win IoT supports Dragon, MinnowMax, hopefully more soon.
 
 The **ProjectSpecificFiles** folder contains the project header file (RHWinIotArduino.h in the repo), which specifies hardware, and optionally includes SPI additional functions such as I2C, PWM, UART, etc.  If your project needs specific behaviors such as base class inheritance or method signatures, you can implement them here as wrapper classes\methods around the WinIoTArduino classes and methods.
 
