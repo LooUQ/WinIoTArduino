@@ -5,23 +5,39 @@
 
 
 #pragma once
+#include "HW_WinIoTArduino.h"
 
-#define RPI_GPIO_PIN_COUNT 26
+#ifndef WINIOT_DEVICE
+#define WINIOT_DEVICE WINIOT_DEVICE_RASPBERRYPI
+#endif // !WinIotDevice
 
-#define RADIO_SPI_CS_PIN 26
-#define RADIO_SPI_INDEX 1
+// create additional HW_* headers for other devl boards with difference GPIO/SPI/I2C configurations
+#if (WINIOT_DEVICE == WINIOT_DEVICE_RASPBERRYPI3)
+#include "HW_RaspberryPI3.h"
+#elif (WINIOT_DEVICE == WINIOT_DEVICE_DRAGONBOARD401C)
+#include "HW_DragonBoard410C.h"
+#endif
 
-// create simple definitions for Arduino header definitions
+
+// create simple definitions matching Arduino header definitions
 #define OUTPUT GPIO_MODE_OUTPUT
 #define INPUT GPIO_MODE_INPUT
 #define HIGH HIGH
 #define LOW LOW
-#define CHANGE 1
-#define FALLING 2
-#define RISING 3
+#define RISING (int)WinIot_IrqEventMode::Rising
+#define FALLING (int)WinIot_IrqEventMode::Falling
+#define CHANGE (int)WinIot_IrqEventMode::Change
+
 
 using namespace Windows::Devices::Gpio;
+using namespace Windows::Foundation;
 
+typedef enum
+{
+	Rising = 1,
+	Falling = 2,
+	Change = 3
+} WinIot_IrqEventMode;
 
 typedef enum
 {
@@ -36,19 +52,22 @@ typedef enum
 } WinIot_GPIOValue;
 
 
-ref class MillisEmulator sealed
-{
-public:
-	MillisEmulator();
-	uint32_t GetMillis();
+// classless functionality to simulate on Raspberry PI (UWP::Device)
+// ====================================================================================================================
 
-private:
-	uint32_t millisValue;
-	Windows::System::Threading::ThreadPoolTimer^ millisTimer;
-};
+void pinMode(unsigned char pin, unsigned char mode);
+void digitalWrite(unsigned char pin, unsigned char value);
+uint8_t digitalRead(unsigned char pin);
 
-extern MillisEmulator millisEmulator;
+uint32_t millis();
+void delay(uint32_t delayMillis);
+int32_t random(int32_t min = LONG_MIN, int32_t max = LONG_MAX);
 
+//void attachInterrupt(uint8_t interruptNum, void (*userFunc)(void), int mode)
+void attachInterrupt(uint8_t irqNum, void(*ISR)(void), int eventMode);
+void detachInterrupt(uint8_t irqNum);
+void disableInterrupts();
+void enableInterrupts();
 
 class SerialEmulator
 {
@@ -82,31 +101,18 @@ extern SerialEmulator Serial;
 class GpioEmulator
 {
 public:
+	GpioEmulator();
 	GpioPin^ OpenGpio(uint8_t pin);
 
-	GpioPin^ gpioPins[RPI_GPIO_PIN_COUNT + 1];
-
 private:
-	bool gpioInUse[RPI_GPIO_PIN_COUNT + 1];
+	GpioController^ _gpioController;
+	//std::vector<std::pair<uint8_t, GpioPin^>> _gpioPins;
+	std::map<uint8_t, GpioPin^> _gpioPins;
+
+	//GpioEmulatorPin _gpioPins[WINIOT_GPIO_PINS];
 };
 
 extern GpioEmulator gpioEmulator;
-
-
-// classless functionality to simulate on Raspberry PI (UWP::Device)
-// ====================================================================================================================
-
-void pinMode(unsigned char pin, unsigned char mode);
-void digitalWrite(unsigned char pin, unsigned char value);
-uint8_t digitalRead(unsigned char pin);
-
-uint32_t millis();
-void delay(uint32_t delayMillis);
-int32_t random(int32_t min = LONG_MIN, int32_t max = LONG_MAX);
-
-//void attachInterrupt(uint8_t interruptNum, void (*userFunc)(void), int mode)
-void attachInterrupt(uint8_t interrupt, void(*ISR)(void), int mode);
-void detachInterrupt(uint8_t interrupt);
 
 
 // mutex lock class, implemements ATOMIC_BLOCK_ macro and used for protecting RH _mode\chip mode changes
@@ -116,15 +122,88 @@ class MutexLock
 {
 public:
 	MutexLock();
+	MutexLock(char symbol);
 	~MutexLock();
 
-	void acquire();
-	bool tryAcquire(size_t timeOutMillis);
+	void acquire(char* dbgToken = "");
+	bool tryAcquire(size_t timeOutMillis, char* dbgToken = "");
 	void release();
 
 private:
 	HANDLE m_hMutex;
+	char _symbol;
 };
 
-extern MutexLock radioModeMutex;
-extern MutexLock atomicBlockMutex;
+
+// semaphore lock class, implemements ATOMIC_BLOCK_ type macros, used for protecting critical sections
+// ====================================================================================================================
+
+class SemaphoreLock
+{
+public:
+	SemaphoreLock();
+	SemaphoreLock(int maxSignals);
+	SemaphoreLock(int maxSignals, char dbgSymbol, LPCSTR name);
+	~SemaphoreLock();
+
+	void acquire(const char* dbgToken = "-");
+	bool tryAcquire(size_t timeOutMillis, const char* dbgToken = "-");
+	void release();
+
+private:
+	HANDLE _hSemaphore;
+	char _dbgSymbol;
+};
+
+
+
+
+// IRQ enable\disable implemented with semaphore lock class
+// ====================================================================================================================
+
+typedef void(*ISR)(void);
+typedef std::tuple<WinIot_IrqEventMode, ISR, EventRegistrationToken> IrqItem;
+typedef std::map<uint8_t, IrqItem> IrqRegistrations;
+
+typedef enum
+{
+	EventMode,
+	Isr,
+	EventRegToken
+} WinIot_IrqItem;
+
+
+ref class InterruptsEmulator sealed
+{
+internal:
+	InterruptsEmulator();
+
+	void AttachInterrupt(uint8_t interrupt, ISR isr, WinIot_IrqEventMode irqEvent);
+	void DetachInterrupt(uint8_t interrupt);
+	void InterruptPinChangedEventHandler(GpioPin ^sender, GpioPinValueChangedEventArgs ^args);
+
+	void EnableInterrupts();
+	void DisableInterrupts();
+
+	bool WaitIrqEnabled();
+	bool WaitIrqEnabled(size_t timeout);
+
+private:
+	IrqRegistrations _irqRegistrations;
+};
+
+extern InterruptsEmulator interruptsEmulator;
+
+
+//namespace WinIot
+//{
+//	void InterruptPinChanged(Windows::Devices::Gpio::GpioPin ^sender, Windows::Devices::Gpio::GpioPinValueChangedEventArgs ^args);
+//
+//	void EnableInterrupts();
+//	void DisableInterrupts();
+//
+//	bool WaitIrqEnabled();
+//	bool WaitIrqEnabled(size_t timeout);
+//}
+
+

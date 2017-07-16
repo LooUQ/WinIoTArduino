@@ -1,62 +1,87 @@
 #include "pch.h"
 #include "WinIotArduino.h"
 #include "Windows.h"
+#include <ctime>
 
 // uncomment lines below to show debug print() statements
-//#define DEBUG_SHOW_IRQPIN
-//#define DEBUG_SHOW_MUTEX
+#define DEBUG_IRQPIN
+//#define DEBUG_MUTEX
+//#define DEBUG_SEMAPHORE
 
-
+using namespace concurrency;
 using namespace Windows::Foundation;
 using namespace Windows::Devices::Gpio;
 using namespace Windows::System::Threading;
 using namespace Windows::System::Diagnostics;
 
-#include <ctime>
 
-void pinMode(unsigned char pin, unsigned char mode)
+void pinMode(unsigned char gpio, unsigned char mode)
 {
-	auto gpioPin = gpioEmulator.OpenGpio(pin);
+	auto gpioPin = gpioEmulator.OpenGpio(gpio);
 
-	switch (mode)
+	if (gpioPin != nullptr)
 	{
-	case WinIot_GPIOMode::GPIO_MODE_OUTPUT:
-		gpioPin->SetDriveMode(GpioPinDriveMode::Output);
-		break;
-	case WinIot_GPIOMode::GPIO_MODE_INPUT:
-		gpioPin->SetDriveMode(GpioPinDriveMode::Input);
-		break;
-	default:
-		break;
-	}
-}
-
-
-void digitalWrite(unsigned char pin, unsigned char value)
-{
-	auto gpioPin = gpioEmulator.OpenGpio(pin);
-
-	if (gpioPin->IsDriveModeSupported(GpioPinDriveMode::Output))
-	{
-		switch (value)
+		try
 		{
-		case WinIot_GPIOValue::HIGH:
-			gpioPin->Write(GpioPinValue::High);
-			break;
-		case WinIot_GPIOValue::LOW:
-			gpioPin->Write(GpioPinValue::Low);
-			break;
-		default:
-			break;
+			switch (mode)
+			{
+			case WinIot_GPIOMode::GPIO_MODE_OUTPUT:
+				if (gpioPin->IsDriveModeSupported(GpioPinDriveMode::Output))
+					gpioPin->SetDriveMode(GpioPinDriveMode::Output);
+				break;
+			case WinIot_GPIOMode::GPIO_MODE_INPUT:
+				if (gpioPin->IsDriveModeSupported(GpioPinDriveMode::Input))
+					gpioPin->SetDriveMode(GpioPinDriveMode::Input);
+				break;
+			default:
+				break;
+			}
+		}
+		catch (const std::out_of_range&)
+		{
+			Serial.println("***Error: Memory ref error in pinMode()");
 		}
 	}
 }
 
-uint8_t digitalRead(unsigned char pin) 
+
+void digitalWrite(unsigned char gpio, unsigned char value)
 {
-	auto gpioPin = gpioEmulator.OpenGpio(pin);
-	GpioPinValue pinValue = gpioPin->Read();
-	return (uint8_t)pinValue;
+	auto gpioPin = gpioEmulator.OpenGpio(gpio);
+
+	if (gpioPin != nullptr && gpioPin->GetDriveMode() == GpioPinDriveMode::Output)
+	{
+		try
+		{
+			switch (value)
+			{
+			case WinIot_GPIOValue::HIGH:
+				gpioPin->Write(GpioPinValue::High);
+				break;
+			case WinIot_GPIOValue::LOW:
+				gpioPin->Write(GpioPinValue::Low);
+				break;
+			default:
+				break;
+			}
+		}
+		catch (const std::out_of_range&)
+		{
+			Serial.println("***Error: Memory ref error in digitalWrite()");
+		}
+	}
+}
+
+uint8_t digitalRead(unsigned char gpio)
+{
+	auto gpioPin = gpioEmulator.OpenGpio(gpio);
+
+	if (gpioPin != nullptr)
+	{
+		GpioPinValue pinValue = gpioPin->Read();
+		return (uint8_t)pinValue;
+	}
+	return 0;
 }
 
 
@@ -82,57 +107,169 @@ int32_t random(int32_t min, int32_t max)
 	return retVal;
 }
 
+void attachInterrupt(uint8_t irqNum, void(*isr)(void), int eventMode)
+{
+	WinIot_IrqEventMode mode = static_cast<WinIot_IrqEventMode>(eventMode);
+	interruptsEmulator.AttachInterrupt(irqNum, isr, mode);
+}
+
+void detachInterrupt(uint8_t irqNum)
+{
+	interruptsEmulator.DetachInterrupt(irqNum);
+}
+
+void disableInterrupts()
+{
+	interruptsEmulator.DisableInterrupts();
+}
+
+void enableInterrupts()
+{
+	interruptsEmulator.EnableInterrupts();
+}
+
 // =====================================================================================================================
 
 
-typedef void(*ISR)(void);
+GpioEmulator gpioEmulator;
 
-ISR isr[RPI_GPIO_PIN_COUNT + 1];
-
-void InterruptPinChanged(Windows::Devices::Gpio::GpioPin ^sender, Windows::Devices::Gpio::GpioPinValueChangedEventArgs ^args);
-
-
-void attachInterrupt(uint8_t interrupt, void(*ISR)(void), int mode)
+GpioEmulator::GpioEmulator()
 {
-	isr[interrupt] = ISR;
+	_gpioController = GpioController::GetDefault();
+}
 
-	GpioPin^ intPin = gpioEmulator.OpenGpio(interrupt);
+Windows::Devices::Gpio::GpioPin^ GpioEmulator::OpenGpio(uint8_t gpioNum)
+{
+	auto findIt = _gpioPins.find(gpioNum);
 
-	if (intPin->IsDriveModeSupported(GpioPinDriveMode::InputPullDown))
+	if (findIt == _gpioPins.end())		// open GPIO
 	{
-		intPin->SetDriveMode(GpioPinDriveMode::InputPullDown);
-		Serial.println("Interrupt pin set to InputPullDown");
+		GpioOpenStatus openStatus;
+		GpioPin^ gpioPin;
+		if (_gpioController->TryOpenPin(gpioNum, GpioSharingMode::Exclusive, &gpioPin, &openStatus))
+		{
+			_gpioPins[gpioNum] = gpioPin;
+			return gpioPin;
+		}
+		else
+		{
+			Serial.printf("***Error Open GPIO failed, GPIO#: %d invalid or unavailable\r\n", gpioNum);
+			_gpioPins[gpioNum] = nullptr;
+			return nullptr;
+		}
+	}
+	else								// return existing opened GPIO
+	{
+		return findIt->second;
+	}
+}
+
+// =====================================================================================================================
+
+//#define WINIOT_GPIO_PINS 27
+//
+//ISR isr[WINIOT_GPIO_PINS + 1];
+//int irqMode[WINIOT_GPIO_PINS + 1];
+//EventRegistrationToken irqHndlr[WINIOT_GPIO_PINS + 1];
+
+InterruptsEmulator interruptsEmulator;
+
+
+InterruptsEmulator::InterruptsEmulator()
+{
+}
+
+void InterruptsEmulator::AttachInterrupt(uint8_t irqNum, ISR isr, WinIot_IrqEventMode irqEvent)
+{
+	auto findIt = _irqRegistrations.find(irqNum);
+
+	if (findIt == _irqRegistrations.end())
+	{
+		GpioPin^ irqGpio = gpioEmulator.OpenGpio(irqNum);
+		if (irqGpio != nullptr)
+		{
+			irqGpio->SetDriveMode(GpioPinDriveMode::Input);
+			EventRegistrationToken eventRegToken = irqGpio->ValueChanged += ref new TypedEventHandler<GpioPin ^, GpioPinValueChangedEventArgs ^>(this, &InterruptsEmulator::InterruptPinChangedEventHandler);
+
+			//                        std::tuple<WinIot_IrqEventMode, ISR, EventRegistrationToken>
+			IrqItem newIrqItem = std::make_tuple(irqEvent, isr, eventRegToken);
+			_irqRegistrations[irqNum] = newIrqItem;
+		}
 	}
 	else
-	{
-		intPin->SetDriveMode(GpioPinDriveMode::Input);
-		Serial.println("Interrupt pin set to Input");
-	}
-
-	intPin->Write(GpioPinValue::Low);
-
-	intPin->ValueChanged += ref new Windows::Foundation::TypedEventHandler<Windows::Devices::Gpio::GpioPin ^, Windows::Devices::Gpio::GpioPinValueChangedEventArgs ^>(&InterruptPinChanged);
-}
-
-void detachInterrupt(uint8_t interrupt)
-{
-	isr[interrupt] = nullptr;
+		Serial.printf("***Error - Interrupt already attached at: %d\r\n", irqNum);
 }
 
 
-void InterruptPinChanged(Windows::Devices::Gpio::GpioPin ^sender, Windows::Devices::Gpio::GpioPinValueChangedEventArgs ^args)
+void InterruptsEmulator::DetachInterrupt(uint8_t irqNum)
 {
-	uint8_t intPin = sender->PinNumber;
+	GpioPin^ irqGpio = gpioEmulator.OpenGpio(irqNum);
+	irqGpio->ValueChanged -= std::get<WinIot_IrqItem::EventRegToken>(_irqRegistrations[irqNum]);
+	irqGpio = nullptr;
+}
 
-	#ifdef DEBUG_SHOW_IRQPIN
-		char symb[2] = { '.', '^' };
-		Serial.printf(" %c", symb[(uint8_t)args->Edge]);
-	#endif // DEBUG_SHOWIRQPIN
 
-	if (args->Edge == GpioPinEdge::RisingEdge && isr[sender->PinNumber] != nullptr)
+void InterruptsEmulator::InterruptPinChangedEventHandler(Windows::Devices::Gpio::GpioPin ^sender, Windows::Devices::Gpio::GpioPinValueChangedEventArgs ^args)
+{
+#ifdef DEBUG_IRQPIN
+	char symb[2] = { '_', '^' };
+	Serial.printf(" %c", symb[(uint8_t)args->Edge]);
+#endif // DEBUG_SHOWIRQPIN
+
+	try
 	{
-		isr[intPin]();
+		auto irqItem = _irqRegistrations.at(sender->PinNumber);
+		WinIot_IrqEventMode irqMode = std::get<WinIot_IrqItem::EventMode>(_irqRegistrations[sender->PinNumber]);
+
+		if ((irqMode == (int)WinIot_IrqEventMode::Change) ||
+			(irqMode == (int)WinIot_IrqEventMode::Rising && (uint8_t)args->Edge == (int)GpioPinEdge::RisingEdge) ||
+			(irqMode == (int)WinIot_IrqEventMode::Falling && (uint8_t)args->Edge == (int)GpioPinEdge::FallingEdge))
+		{
+			InterruptsEmulator::WaitIrqEnabled();
+			ISR isr = std::get<WinIot_IrqItem::Isr>(_irqRegistrations[sender->PinNumber]);
+			isr();
+		}
 	}
+	catch (const std::out_of_range&)
+	{
+		Serial.printf("***Error - No interrupt attached at: %d", sender->PinNumber);
+	}
+}
+
+bool _interruptsEnabled = true;
+
+void InterruptsEmulator::EnableInterrupts()
+{
+	_interruptsEnabled = true;
+}
+
+void InterruptsEmulator::DisableInterrupts()
+{
+	_interruptsEnabled = false;
+}
+
+bool InterruptsEmulator::WaitIrqEnabled()
+{
+	int yieldWaitMillis = 5;
+
+	while (!_interruptsEnabled)
+		WaitForSingleObjectEx(::GetCurrentThread(), yieldWaitMillis, FALSE);
+	return true;
+}
+
+bool InterruptsEmulator::WaitIrqEnabled(size_t timeout)
+{
+	int yieldWaitMillis = 5;
+
+	unsigned long starttime = millis();
+	while ((millis() - starttime) < timeout)
+	{
+		if (!_interruptsEnabled)
+			return true;
+		WaitForSingleObjectEx(::GetCurrentThread(), yieldWaitMillis, FALSE);
+	}
+	return false;
+
 }
 
 // =====================================================================================================================
@@ -251,84 +388,176 @@ size_t SerialEmulator::write(const char * s, const size_t bytes)
 
 // =====================================================================================================================
 
-GpioEmulator gpioEmulator;
 
-Windows::Devices::Gpio::GpioPin^ GpioEmulator::OpenGpio(uint8_t pin)
+MutexLock::MutexLock()
 {
-	if (gpioInUse[pin])
+	_symbol = 'M';
+	m_hMutex = (HANDLE) ::CreateMutex(NULL, FALSE, NULL);
+	if (NULL == m_hMutex)
 	{
-		return gpioPins[pin];
-	}
-	else
-	{
-		GpioController^ gpioController = GpioController::GetDefault();
-		gpioPins[pin] = gpioController->OpenPin(pin);
-		gpioInUse[pin] = true;
-		return gpioPins[pin];
+		Serial.println("***ERROR: Cannot create mutex");
 	}
 }
 
+MutexLock::MutexLock(char symbol)
+{
+	_symbol = symbol;
+	m_hMutex = (HANDLE) ::CreateMutex(NULL, FALSE, NULL);
+	if (NULL == m_hMutex)
+	{
+		Serial.println("***ERROR: Cannot create mutex");
+	}
+}
+
+MutexLock::~MutexLock()
+{
+	::CloseHandle(m_hMutex);
+}
+
+
+void MutexLock::acquire(char* dbgToken)
+{
+	if (::WaitForSingleObject(m_hMutex, INFINITE) != WAIT_OBJECT_0)
+	{
+		Serial.println("***ERROR: Cannot acquire mutex");
+	}
+#ifdef DEBUG_MUTEX
+	Serial.printf(" %c{%s ", _symbol, dbgToken);
+#endif // DEBUG_MUTEX
+}
+
+bool MutexLock::tryAcquire(size_t timeOutMillis, char* dbgToken)
+{
+	bool retval = false;
+	switch (::WaitForSingleObject(m_hMutex, timeOutMillis))
+	{
+	case WAIT_OBJECT_0:
+		retval = true;
+#ifdef DEBUG_MUTEX
+		Serial.printf(" %c{%s ", _symbol, dbgToken);
+#endif // DEBUG_MUTEX
+		break;
+	case WAIT_TIMEOUT:
+		Serial.println("***ERROR: Timeout-Cannot acquire mutex");
+		break;
+	default:
+		Serial.println("***ERROR: Cannot acquire mutex");
+		break;
+	}
+
+	return retval;
+}
+
+void MutexLock::release()
+{
+	if (::ReleaseMutex(m_hMutex) == 0)
+	{
+		Serial.println("***ERROR: Cannot release mutex");
+	}
+#ifdef DEBUG_MUTEX
+	Serial.printf("}%c ", _symbol);
+#endif // DEBUG_MUTEX
+}
 
 // =====================================================================================================================
 
-	MutexLock::MutexLock()
+
+SemaphoreLock::SemaphoreLock()
+{
+	_dbgSymbol = ' ';
+	int maxSignals = 1;
+	const char* name = "semaphoreLock";
+
+	_hSemaphore = (HANDLE)::CreateSemaphoreA(
+		NULL,
+		maxSignals,
+		maxSignals,
+		name
+	);
+	if (_hSemaphore == NULL)
 	{
-		m_hMutex = (HANDLE) ::CreateMutex(0, 0, 0);
-		if (NULL == m_hMutex)
-		{
-			Serial.println("***ERROR: Cannot create mutex");
-		}
+		Serial.println("***ERROR: Cannot create semaphore object");
 	}
+}
 
-	MutexLock::~MutexLock()
+SemaphoreLock::SemaphoreLock(int maxSignals)
+{
+	_dbgSymbol = ' ';
+	const char* name = "semaphoreLock";
+
+	_hSemaphore = (HANDLE)::CreateSemaphoreA(
+		NULL,
+		maxSignals,
+		maxSignals,
+		name
+	);
+	if (_hSemaphore == NULL)
 	{
-		::CloseHandle(m_hMutex);
+		Serial.println("***ERROR: Cannot create semaphore object");
 	}
+}
 
-
-	void MutexLock::acquire()
+SemaphoreLock::SemaphoreLock(int maxSignals, char dbgSymbol, LPCSTR name)
+{
+	_dbgSymbol = dbgSymbol;
+	_hSemaphore = (HANDLE)::CreateSemaphoreA(
+		NULL,
+		maxSignals,
+		maxSignals,
+		name
+	);
+	if (_hSemaphore == NULL)
 	{
-		if (::WaitForSingleObject(m_hMutex, INFINITE) != WAIT_OBJECT_0)
-		{
-			Serial.println("***ERROR: Cannot acquire mutex");
-		}
-		#ifdef DEBUG_SHOW_MUTEX
-			Serial.print(" mA[ ");
-		#endif // DEBUG_SHOW_MUTEX
+		Serial.println("***ERROR: Cannot create semaphore object");
 	}
+}
 
-	bool MutexLock::tryAcquire(size_t timeOutMillis)
+SemaphoreLock::~SemaphoreLock()
+{
+	::CloseHandle(_hSemaphore);
+}
+
+
+void SemaphoreLock::acquire(const char* dbgToken)
+{
+	if (::WaitForSingleObject(_hSemaphore, INFINITE) != WAIT_OBJECT_0)
 	{
-		bool retval = false;
-		switch (::WaitForSingleObject(m_hMutex, timeOutMillis))
-		{
-		case WAIT_OBJECT_0:
-			retval = true;
-			#ifdef DEBUG_SHOW_MUTEX
-				Serial.print(" X[ ");
-			#endif // DEBUG_SHOW_MUTEX
-			break;
-		case WAIT_TIMEOUT:
-			Serial.println("***ERROR: Timeout-Cannot acquire mutex");
-			break;
-		default:
-			Serial.println("***ERROR: Cannot acquire mutex");
-			break;
-		}
-
-		return retval;
+		Serial.println("***ERROR: Cannot acquire semaphore");
 	}
+#ifdef DEBUG_SEMAPHORE
+	Serial.printf(" %c[%s", _dbgSymbol, dbgToken);
+#endif // DEBUG_SEMAPHORE
+}
 
-	void MutexLock::release()
+bool SemaphoreLock::tryAcquire(size_t timeOutMillis, const char* dbgToken)
+{
+	bool retval = false;
+	switch (::WaitForSingleObject(_hSemaphore, timeOutMillis))
 	{
-		if (::ReleaseMutex(m_hMutex) == 0)
-		{
-			Serial.println("***ERROR: Cannot release mutex");
-		}
-		#ifdef DEBUG_SHOW_MUTEX
-			Serial.print(" ]X ");
-		#endif // DEBUG_SHOW_MUTEX
+	case WAIT_OBJECT_0:
+		retval = true;
+#ifdef DEBUG_SEMAPHORE
+		Serial.printf(" %c[%s", _dbgSymbol, dbgToken);
+#endif // DEBUG_SEMAPHORE
+		break;
+	case WAIT_TIMEOUT:
+		Serial.println("***ERROR: Cannot acquire semaphore/timeout");
+		break;
+	default:
+		Serial.println("***ERROR: Cannot acquire semaphore");
+		break;
 	}
+	return retval;
+}
 
-	MutexLock radioModeMutex;
-	MutexLock atomicBlockMutex;
+void SemaphoreLock::release()
+{
+	if (!ReleaseSemaphore(_hSemaphore, 1, NULL))
+	{
+		Serial.println("***ERROR: Cannot release semaphore");
+	}
+#ifdef DEBUG_SEMAPHORE
+	Serial.printf("]%c ", _dbgSymbol);
+#endif // DEBUG_SEMAPHORE
+}
+

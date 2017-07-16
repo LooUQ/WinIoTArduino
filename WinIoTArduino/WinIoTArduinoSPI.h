@@ -1,49 +1,43 @@
 #pragma once
 
+#include "pch.h"
+#include "WinIoTArduino.h"
 
+#define DEFAULT_SPI_CTRLINDX 0
+#define DEFAULT_SPI_CLOCKFREQ 1000000
+#define DEFAULT_SPI_MODE SpiMode::Mode0
+
+using namespace Platform;
 using namespace Windows::Devices::Spi;
-
-#ifdef DEBUG
-
-#endif // DEBUG
+using namespace Windows::Devices::Gpio;
 
 
-/*! \brief WINIOTSPIBitOrder SPI Bit order
-Specifies the SPI data bit ordering for WinIot_spi_setBitOrder()
-*/
 typedef enum
 {
-	LSBFIRST = 0,  /*!< LSB First */
-	MSBFIRST = 1   /*!< MSB First */
-}WinIot_SPIBitOrder;
-
-/*! \brief SPI Data mode
-Specify the SPI data mode to be passed to WinIot_spi_setDataMode()
-*/
-typedef enum
-{
-	MODE0 = 0,  /*!< CPOL = 0, CPHA = 0 */
-	MODE1 = 1,  /*!< CPOL = 0, CPHA = 1 */
-	MODE2 = 2,  /*!< CPOL = 1, CPHA = 0 */
-	MODE3 = 3   /*!< CPOL = 1, CPHA = 1 */
-} WinIot_SPIMode;
+	MSBFIRST = 0,   /*!< MSB First */
+	LSBFIRST = 1	/*!< LSB First */
+} SpiBitOrder;
 
 
 
 class WinIotArduinoSPI
 {
 public:
-	WinIotArduinoSPI(int spiIndex = 1, SpiMode spiMode = SpiMode::Mode0, int csPin = 26, int clockFrequency = 100000);
+	WinIotArduinoSPI(int spiIndex = DEFAULT_SPI_CTRLINDX, SpiMode spiMode = DEFAULT_SPI_MODE, SpiBitOrder bitOrder = MSBFIRST, int clockFrequency = DEFAULT_SPI_CLOCKFREQ);
 	~WinIotArduinoSPI();
 
 	void begin();
 	void end();
-
 	uint8_t transfer(uint8_t data);
 
 private:
-	Windows::Devices::Spi::SpiDevice^ spiDevice;
-	Windows::Devices::Gpio::GpioPin^ spiDeviceCS;
+	int _ctrlIndex;
+	SpiMode _spiMode;
+	SpiBitOrder _bitOrder;			// bit order on WinIoT implementation of SPI is MSB, could implement bit flipper in future
+	int _clockFrequency;
+
+	SpiDevice^ _spiDevice;
+	GpioPin^ _spiCsGpio;
 };
 
 

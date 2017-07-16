@@ -1,48 +1,54 @@
+/// This concrete subclass of the RadioHead GenericSPIClass that supports the Raspberry PI running Windows 10 IoT Core
+/// RadioHead is // Copyright (C) 2014 Mike McCauley, to use RadioHead ensure you review and comply with their licensing
+
+/*  Copyright 2017 LooUQ Incorporated.
+ *  Licensed under AGPLv3
+ */
+
+/* This is the project specific SPI driver implemenation for the LooUQ RadioHead port, using the 
+ * LooUQ WinIotArduinoSPI library.
+ * The RHWinIotArduionoSPI library invokes WinIotArduinoSPI methods to perform SPI I/O and creates a new
+ * project specific method to translate the RH SPI frequency enum into an int for the WinIotArduinoSPI library.
+*/
+
 #include "pch.h"
-#include "RHWinIotArduino.h"
-#include "RHWinIotArduinoSPI.h"
-
-//using namespace IotqiDevices::Network::RadioHead;
-
-#define SPI_INDEX 1
-#define SPI_CS 26
-
-RHWinIotArduinoSPI::RHWinIotArduinoSPI(Frequency frequency, BitOrder bitOrder, DataMode dataMode) :
-	RHWinIotArduinoSPI(frequency, bitOrder, dataMode, SPI_CS) { }
+#include "RHWinIoTArduinoSPI.h"
 
 
-RHWinIotArduinoSPI::RHWinIotArduinoSPI(Frequency frequency, BitOrder bitOrder, DataMode dataMode, int csGpio)
+RHWinIotArduinoSPI::RHWinIotArduinoSPI(int spiCtrlIndx, RHGenericSPI::Frequency frequency, RHGenericSPI::BitOrder bitOrder, RHGenericSPI::DataMode dataMode):
+	RHGenericSPI(frequency, bitOrder, dataMode)
 {
+	/* Base class default constructor
 	_frequency = frequency;
 	_bitOrder = bitOrder;			// ignored by Win Iot (always sends MSB first)
 	_dataMode = dataMode;
+	*/
 
-	int freqAsInt = frequencyAsInt();
-	Windows::Devices::Spi::SpiMode winSpiMode = (Windows::Devices::Spi::SpiMode)_dataMode;
-
-	RHWinIotArduinoSPI::winIotSpi = WinIotArduinoSPI(SPI_INDEX, winSpiMode, csGpio, freqAsInt);
+	int clockFrequency = getFrequencyAsInt();
+	_winIotSpi = new WinIotArduinoSPI(spiCtrlIndx, (SpiMode)_dataMode, SpiBitOrder::MSBFIRST, clockFrequency);
 }
 
-
-void RHWinIotArduinoSPI::begin()
+void RHWinIotArduinoSPI::begin()		// required for RHGenericSPI base
 {
+	_winIotSpi->begin();
 }
 
-
-void RHWinIotArduinoSPI::end()
+void RHWinIotArduinoSPI::end()			// required for RHGenericSPI base
 {
+	_winIotSpi->end();
 }
 
 
 uint8_t RHWinIotArduinoSPI::transfer(uint8_t data)
 {
-	return RHWinIotArduinoSPI::winIotSpi.transfer(data);
+	return _winIotSpi->transfer(data);
 }
 
 
-int RHWinIotArduinoSPI::frequencyAsInt()
+int RHWinIotArduinoSPI::getFrequencyAsInt()
 {
 	int intFreq = 1000000;
+
 	switch (_frequency)
 	{
 	case RHGenericSPI::Frequency::Frequency2MHz:
@@ -56,9 +62,6 @@ int RHWinIotArduinoSPI::frequencyAsInt()
 		break;
 	case RHGenericSPI::Frequency::Frequency16MHz:
 		intFreq = 16000000;
-		break;
-	default:
-		intFreq = 1000000;
 		break;
 	}
 	return intFreq;

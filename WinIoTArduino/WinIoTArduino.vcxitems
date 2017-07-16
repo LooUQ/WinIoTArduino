@@ -15,9 +15,11 @@
     <ProjectCapability Include="SourceItemsFromImports" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)HW_DragonBoard410C.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)HW_RaspberryPI.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)WinIoTArduino.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)WinIoTArduinoSPI.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)HW_WinIoTArduino.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="$(MSBuildThisFileDirectory)WinIoTArduinoSPI.cpp" />
