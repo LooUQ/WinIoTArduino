@@ -42,7 +42,6 @@ void WinIotArduinoSPI::begin()
 			_spiDevice = selectedSpiDevice;
 		});
 	});
-	while (_spiDevice == nullptr);			// no exit until SPI device pointer set, SPI must finish initialization
 }
 
 void WinIotArduinoSPI::end()
@@ -54,6 +53,8 @@ uint8_t WinIotArduinoSPI::transfer(uint8_t data)
 {
 	auto writeData = ref new Array<uint8_t>(1);
 	auto readData = ref new Array<uint8_t>(1);
+
+	while (_spiDevice == nullptr);			// begin() task not finished, wait for SPI device ready
 
 	writeData[0] = data;
 	_spiDevice->TransferFullDuplex(writeData, readData);
